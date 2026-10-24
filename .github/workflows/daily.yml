@@ -1,0 +1,61 @@
+name: Jadwalkan Shorts ke Buffer
+
+on:
+  schedule:
+    - cron: "0 17 * * *"   # 17:00 UTC = 00:00 WIB, jalan tiap hari
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "channels = tampilkan ID channel, schedule = jadwalkan video"
+        type: choice
+        options: [schedule, channels]
+        default: schedule
+      dry_run:
+        description: "Uji coba saja, tidak mengirim ke Buffer"
+        type: boolean
+        default: true
+      draft:
+        description: "Simpan sebagai draft di Buffer (untuk uji coba)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: buffer-schedule
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Jalankan skrip
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
+          BRANCH: ${{ github.ref_name }}
+          LOOKAHEAD_DAYS: "3"
+          AI_GENERATED: "false"
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+          DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft && '1' || '0' }}
+        run: python scripts/post_to_buffer.py ${{ inputs.mode || 'schedule' }}
+
+      # always() penting: kalau satu video gagal, status video yang sudah
+      # terjadwal tetap tersimpan sehingga tidak dijadwalkan dua kali besok.
+      - name: Simpan perubahan jadwal.csv
+        if: always()
+        run: |
+          if ! git diff --quiet -- jadwal.csv; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add jadwal.csv
+            git commit -m "Update status jadwal"
+            git push
+          fi
